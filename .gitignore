@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual Environment
+venv/
+env/
+.venv/
+ENV/
+
+# Database
+*.db
+*.sqlite3
+app.db
+
+# Environment Variables
+.env
+.env.*
+
+# PaddleOCR / PaddlePaddle model cache
+inference/
+~/.paddleocr/
+paddleocr_model/
+
+# Hugging Face / TrOCR model cache
+.cache/
+~/.cache/huggingface/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test outputs / uploads
+*.jpeg
+*.jpg
+*.png
+*.bmp
+!public/**/*.png
+!public/**/*.jpg
+
+# Zip / Archives
+*.zip
