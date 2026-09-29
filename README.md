@@ -104,20 +104,34 @@ Image uploads still go under `data/uploads/` (filesystem).
 
 This repo’s **local** git identity is `devgeektech <development.geektech@gmail.com>`.
 
-To commit without Cursor co-author trailers:
+**Commit on master** (default — no branch flag):
 
 ```powershell
 .\scripts\commit.ps1 -Message "Describe your change"
 ```
 
-Optional paths only:
+**Commit on a new or existing feature branch:**
 
 ```powershell
-.\scripts\commit.ps1 -Message "Fix stream headers" apps/hpi scripts/commit.ps1
+.\scripts\commit.ps1 -Message "Describe your change" -Branch feature/my-change
+```
+
+**Merge that branch into master** when you are ready (local only):
+
+```powershell
+.\scripts\merge-to-master.ps1 -Branch feature/my-change
+```
+
+Optional paths only (still respects `-Branch`):
+
+```powershell
+.\scripts\commit.ps1 -Message "Fix stream headers" -Branch feature/stream apps/hpi
 ```
 
 Push only when you want it on GitHub:
 
 ```powershell
 git push origin master
+# or for a feature branch:
+git push -u origin feature/my-change
 ```
