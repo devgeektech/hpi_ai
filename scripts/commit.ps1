@@ -47,20 +47,34 @@ if (-not (Test-Path $gitCmd)) { $gitCmd = "git" }
 
 function Invoke-Git {
     param([string[]]$GitArgs)
-    & $gitCmd @GitArgs
-    if ($LASTEXITCODE -ne 0) {
-        throw "git $($GitArgs -join ' ') failed with exit $LASTEXITCODE"
+    # Write to host only — do not pollute function return values / $target.
+    # Git prints status on stderr; ignore native stderr as terminating errors.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $output = & $gitCmd @GitArgs 2>&1
+        foreach ($line in $output) {
+            Write-Host "$line"
+        }
+        if ($LASTEXITCODE -ne 0) {
+            throw "git $($GitArgs -join ' ') failed with exit $LASTEXITCODE"
+        }
+    }
+    finally {
+        $ErrorActionPreference = $prev
     }
 }
 
 function Test-LocalBranchExists {
     param([string]$Name)
-    & $gitCmd show-ref --verify --quiet "refs/heads/$Name"
+    & $gitCmd show-ref --verify --quiet "refs/heads/$Name" | Out-Null
     return ($LASTEXITCODE -eq 0)
 }
 
 function Get-LocalBranches {
-    & $gitCmd for-each-ref --format="%(refname:short)" refs/heads/
+    @(
+        & $gitCmd for-each-ref --format="%(refname:short)" refs/heads/ 2>$null
+    ) | Where-Object { $_ -and $_.Trim() } | ForEach-Object { $_.Trim() }
 }
 
 function Read-YesNo {
@@ -224,11 +238,11 @@ function Select-TargetBranchInteractive {
     Write-Host "Base branch: $baseBranch"
     Write-Host ""
 
-    $useMaster = Read-YesNo -Prompt "Commit on $baseBranch?" -DefaultYes $true
+    $useMaster = Read-YesNo -Prompt "Commit on branch '$baseBranch'" -DefaultYes $true
     if ($useMaster) {
         Write-Host "Using $baseBranch."
         Invoke-Git @("checkout", $baseBranch)
-        return $baseBranch
+        return ,$baseBranch
     }
 
     Write-Host ""
@@ -256,15 +270,15 @@ function Select-TargetBranchInteractive {
                     Write-Host "Use master by answering Yes on the first question instead."
                     continue
                 }
-                if (Test-LocalBranchExists $name) {
+                    if (Test-LocalBranchExists $name) {
                     Write-Host "Branch '$name' already exists. Checking it out."
                     Invoke-Git @("checkout", $name)
-                    return $name
+                    return ,$name
                 }
                 Write-Host "Creating '$name' from $baseBranch ..."
                 Invoke-Git @("checkout", $baseBranch)
                 Invoke-Git @("checkout", "-b", $name)
-                return $name
+                return ,$name
             }
         }
         if ($choice -match '^(e|existing)$') {
@@ -275,14 +289,14 @@ function Select-TargetBranchInteractive {
                     if ($idx -ge 0 -and $idx -lt $branches.Count) {
                         $name = $branches[$idx]
                         Invoke-Git @("checkout", $name)
-                        return $name
+                        return ,$name
                     }
                     Write-Host "Invalid number. Pick 1-$($branches.Count)."
                     continue
                 }
                 if (Test-LocalBranchExists $pick) {
                     Invoke-Git @("checkout", $pick)
-                    return $pick
+                    return ,$pick
                 }
                 Write-Host "Unknown branch '$pick'. Try again."
             }
