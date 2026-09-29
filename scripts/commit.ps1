@@ -13,7 +13,8 @@
     .\scripts\commit.ps1 -Message "Fix" -Branch feat/x   # feature branch
     .\scripts\commit.ps1 -Merge -Branch feat/x           # merge into master
 
-  Never pushes. Repo base branch is master (not main).
+  Never auto-pushes in non-interactive mode. Interactive mode asks before each push.
+  Repo base branch is master (not main).
 #>
 param(
     [Parameter(Mandatory = $false)]
@@ -107,10 +108,21 @@ function Show-PushHints {
     }
 }
 
+function Invoke-PushBranch {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+    $Name = $Name.Trim()
+    Write-Host "Pushing '$Name' to origin ..."
+    Invoke-Git @("push", "-u", "origin", $Name)
+    Write-Host "Pushed '$Name' to GitHub (origin/$Name)."
+}
+
 function Invoke-MergeToMaster {
     param(
         [Parameter(Mandatory = $true)][string]$FeatureBranch,
-        [string]$MergeMessage
+        [string]$MergeMessage,
+        [switch]$SkipPushHints
     )
     $FeatureBranch = $FeatureBranch.Trim()
     if ($FeatureBranch -eq $baseBranch) {
@@ -130,8 +142,16 @@ function Invoke-MergeToMaster {
     Invoke-Git @("checkout", $baseBranch)
 
     Write-Host "Merging '$FeatureBranch' into $baseBranch (--no-ff) ..."
-    & $gitCmd -c "user.name=$authorName" -c "user.email=$authorEmail" `
-        merge --no-ff $FeatureBranch -m $mergeMsg
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $mergeOut = & $gitCmd -c "user.name=$authorName" -c "user.email=$authorEmail" `
+            merge --no-ff $FeatureBranch -m $mergeMsg 2>&1
+        foreach ($line in $mergeOut) { Write-Host "$line" }
+    }
+    finally {
+        $ErrorActionPreference = $prev
+    }
     if ($LASTEXITCODE -ne 0) {
         Write-Host ""
         Write-Host "Merge failed (likely conflicts). Fix files, then:"
@@ -148,7 +168,9 @@ function Invoke-MergeToMaster {
     & $gitCmd status -sb
     Write-Host ""
     Write-Host "Feature branch '$FeatureBranch' was kept (not deleted)."
-    Show-PushHints -OnBranch $baseBranch
+    if (-not $SkipPushHints) {
+        Show-PushHints -OnBranch $baseBranch
+    }
 }
 
 function Invoke-CommitOnCurrentBranch {
@@ -317,6 +339,8 @@ if ($Merge) {
 # ----- Interactive wizard (default: run with no -Message) -----
 if (-not $NonInteractive -and [string]::IsNullOrWhiteSpace($Message)) {
     $target = Select-TargetBranchInteractive
+    if ($target -is [array]) { $target = $target[-1] }
+    $target = [string]$target
 
     Write-Host ""
     while ($true) {
@@ -330,18 +354,47 @@ if (-not $NonInteractive -and [string]::IsNullOrWhiteSpace($Message)) {
         exit 0
     }
 
+    # 1) Push the same branch to GitHub
+    Write-Host ""
+    $doPush = Read-YesNo -Prompt "Push '$target' to GitHub now?" -DefaultYes $true
+    if ($doPush) {
+        Invoke-PushBranch -Name $target
+    } else {
+        Write-Host "Skipped push for '$target'."
+    }
+
+    # 2) Optional merge into master (feature branches only)
     if ($target -ne $baseBranch) {
         Write-Host ""
         $doMerge = Read-YesNo -Prompt "Merge '$target' into $baseBranch now?" -DefaultYes $false
         if ($doMerge) {
-            Invoke-MergeToMaster -FeatureBranch $target
+            Invoke-MergeToMaster -FeatureBranch $target -SkipPushHints
+            Write-Host ""
+            $doPushMaster = Read-YesNo -Prompt "Push '$baseBranch' to GitHub now?" -DefaultYes $true
+            if ($doPushMaster) {
+                Invoke-PushBranch -Name $baseBranch
+            } else {
+                Write-Host "Skipped push for '$baseBranch'."
+                Show-PushHints -OnBranch $baseBranch
+            }
             exit 0
         }
-        Show-PushHints -OnBranch $target
+        if (-not $doPush) {
+            Show-PushHints -OnBranch $target
+        } else {
+            Write-Host ""
+            Write-Host "Done. Merge later with:"
+            Write-Host "  .\scripts\commit.ps1 -Merge -Branch $target"
+        }
         exit 0
     }
 
-    Show-PushHints -OnBranch $baseBranch
+    if (-not $doPush) {
+        Show-PushHints -OnBranch $baseBranch
+    } else {
+        Write-Host ""
+        Write-Host "Done."
+    }
     exit 0
 }
 

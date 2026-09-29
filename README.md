@@ -117,9 +117,11 @@ The script will ask you, in order:
 1. **Commit on master?** → `Y` / `N`
 2. If **N**: show existing branches → **N**ew branch or **E**xisting → enter name/number
 3. **Commit message**
-4. If you used a feature branch: **Merge into master now?** → `Y` / `N`
+4. **Push this branch to GitHub?** → `Y` / `N` (same branch you just committed)
+5. If you used a feature branch: **Merge into master now?** → `Y` / `N`
+6. If you merged: **Push master to GitHub?** → `Y` / `N`
 
-It never pushes. At the end it prints the `git push` command if you want GitHub updated.
+Non-interactive mode still does not push unless you run `git push` yourself (or use the interactive prompts above).
 
 ### Non-interactive (optional)
 
