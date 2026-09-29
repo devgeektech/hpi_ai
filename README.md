@@ -102,36 +102,29 @@ Image uploads still go under `data/uploads/` (filesystem).
 
 ## Git commits (author: devgeektech)
 
-This repo’s **local** git identity is `devgeektech <development.geektech@gmail.com>`.
+This repo’s **local** git identity is `devgeektech <development.geektech@gmail.com>`.  
+Base branch name is **`master`**. Use [`scripts/commit.ps1`](scripts/commit.ps1) from PowerShell in the project root.
 
-**Commit on master** (default — no branch flag):
+### Interactive (recommended)
+
+```powershell
+cd C:\Users\GT49220\OneDrive\Desktop\Sushil-Projects\OCR-Project
+.\scripts\commit.ps1
+```
+
+The script will ask you, in order:
+
+1. **Commit on master?** → `Y` / `N`
+2. If **N**: show existing branches → **N**ew branch or **E**xisting → enter name/number
+3. **Commit message**
+4. If you used a feature branch: **Merge into master now?** → `Y` / `N`
+
+It never pushes. At the end it prints the `git push` command if you want GitHub updated.
+
+### Non-interactive (optional)
 
 ```powershell
 .\scripts\commit.ps1 -Message "Describe your change"
-```
-
-**Commit on a new or existing feature branch:**
-
-```powershell
 .\scripts\commit.ps1 -Message "Describe your change" -Branch feature/my-change
-```
-
-**Merge that branch into master** when you are ready (local only):
-
-```powershell
-.\scripts\merge-to-master.ps1 -Branch feature/my-change
-```
-
-Optional paths only (still respects `-Branch`):
-
-```powershell
-.\scripts\commit.ps1 -Message "Fix stream headers" -Branch feature/stream apps/hpi
-```
-
-Push only when you want it on GitHub:
-
-```powershell
-git push origin master
-# or for a feature branch:
-git push -u origin feature/my-change
+.\scripts\commit.ps1 -Merge -Branch feature/my-change
 ```
