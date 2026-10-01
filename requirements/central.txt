@@ -1,6 +1,0 @@
-# Central AI Platform
--r ../requirements.txt
-httpx>=0.27.0
-psycopg2-binary==2.9.9
-# Prefer pinned OCR stack from requirements.txt:
-# paddleocr==2.7.3 / paddlepaddle==2.6.2

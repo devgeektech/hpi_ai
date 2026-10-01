@@ -1,132 +1,96 @@
-# Central AI Monorepo (HMB + Boardroom + HPI)
+# Central AI — Handwriting Analysis API
 
-Greenfield monorepo with **one Central AI Platform** and three product apps.  
-**No Docker** — use the existing Python virtualenv + **PostgreSQL**.
+Stateless **Central AI** service: upload a handwriting image, get OCR + HPI profile JSON.
+**No database. No product UI.** Callers persist results themselves.
+
+Designed as a **centralized microservice** for multiple products via `X-Project-Id`.
 
 ## Architecture
 
 ```text
-HMB (:8001) ──┐
-Boardroom (:8002) ──┼──► Central AI (:8000) ──► CV + HPI engines
-HPI (:8003) ──┘         PRIME™ / ALIGN™ live only on HPI app
+Consumer App / Web Client ──POST image──► Central AI (:8000) ──► OCR + HPI Profile JSON
+                                          (Stateless, fast, deterministic)
 ```
 
-## Setup (venv + Postgres)
+## Directory Structure (Antigravity Standard)
 
-1. Install **PostgreSQL** locally and ensure the `postgres` user can connect (default password in examples: `postgres`).
+```text
+OCR-Project/
+├── src/
+│   └── central_ai/
+│       ├── api/              # FastAPI route controllers & tenancy dependencies
+│       ├── core/             # Configuration & structured logging
+│       ├── engines/          # Preprocessing, PaddleOCR/TrOCR, and HPI assessment
+│       ├── schemas/          # Strongly-typed Pydantic V2 data contracts
+│       ├── client/           # CentralAIClient Python SDK for consumer apps
+│       └── main.py           # Application entry point
+├── data/                     # Runtime uploads and logs
+│   ├── logs/
+│   └── uploads/
+├── scripts/                  # Operations and startup scripts
+│   └── run_central.ps1
+├── pyproject.toml            # Modern Python package specification
+└── requirements.txt          # Pinned dependencies
+```
 
-2. Create databases:
+## Setup
 
 ```powershell
 cd "c:\Users\GT49220\OneDrive\Desktop\Sushil-Projects\OCR-Project"
-.\scripts\init_postgres.ps1
-```
-
-Or in `psql`:
-
-```sql
-CREATE DATABASE central_ai;
-CREATE DATABASE hmb;
-CREATE DATABASE boardroom;
-CREATE DATABASE hpi_app;
-```
-
-3. Python deps:
-
-```powershell
 .\venv\Scripts\Activate.ps1
-pip install -e .\packages\shared
-pip install -r requirements\apps.txt
+pip install -e .
 pip install -r requirements.txt
 ```
 
-4. Optional: copy `.env.example` values into your shell (defaults match local Postgres):
+Optional environment variables:
 
 ```powershell
-$env:CENTRAL_DATABASE_URL = "postgresql+psycopg2://postgres:postgres@localhost:5432/central_ai"
-$env:HMB_DATABASE_URL = "postgresql+psycopg2://postgres:postgres@localhost:5432/hmb"
-$env:BOARDROOM_DATABASE_URL = "postgresql+psycopg2://postgres:postgres@localhost:5432/boardroom"
-$env:HPI_DATABASE_URL = "postgresql+psycopg2://postgres:postgres@localhost:5432/hpi_app"
+$env:CENTRAL_API_KEY = "dev-key"
+$env:TROCR_MODEL_ID = "microsoft/trocr-base-handwritten"   # default
 ```
 
-Tables are created automatically when each app starts (`Base.metadata.create_all`).
-
-## Run (4 terminals, venv activated)
+## Run
 
 ```powershell
-$env:PYTHONPATH = (Get-Location).Path
-uvicorn services.central_ai.app.main:app --reload --port 8000
-uvicorn apps.hmb.app.main:app --reload --port 8001
-uvicorn apps.boardroom.app.main:app --reload --port 8002
-uvicorn apps.hpi.app.main:app --reload --port 8003
+.\scripts\run_central.ps1
 ```
 
-Or use `.\scripts\run_*.ps1`.
-
-## URLs
-
-| Service | URL |
-|---------|-----|
-| Central AI | http://127.0.0.1:8000/ |
-| Central docs | http://127.0.0.1:8000/docs |
-| HMB | http://127.0.0.1:8001/ui |
-| Boardroom | http://127.0.0.1:8002/docs |
-| HPI | http://127.0.0.1:8003/paths |
-
-## Databases
-
-| Service | Env var | Default DB |
-|---------|---------|------------|
-| Central AI | `CENTRAL_DATABASE_URL` | `central_ai` |
-| HMB | `HMB_DATABASE_URL` | `hmb` |
-| Boardroom | `BOARDROOM_DATABASE_URL` | `boardroom` |
-| HPI | `HPI_DATABASE_URL` | `hpi_app` |
-
-Image uploads still go under `data/uploads/` (filesystem).
-
-## HPI paths
-
-1. `POST /assessments/analyze`
-2. `GET /assessments/{id}`
-3. **PRIME™** — `POST /prime/sessions`
-4. **ALIGN™** — `POST /align/journeys`
-
-## Entry points
-
-| Port | Module |
-|------|--------|
-| 8000 | `services.central_ai.app.main:app` |
-| 8001 | `apps.hmb.app.main:app` |
-| 8002 | `apps.boardroom.app.main:app` |
-| 8003 | `apps.hpi.app.main:app` |
-
-## Git commits (author: devgeektech)
-
-This repo’s **local** git identity is `devgeektech <development.geektech@gmail.com>`.  
-Base branch name is **`master`**. Use [`scripts/commit.ps1`](scripts/commit.ps1) from PowerShell in the project root.
-
-### Interactive (recommended)
+Or directly via uvicorn:
 
 ```powershell
-cd C:\Users\GT49220\OneDrive\Desktop\Sushil-Projects\OCR-Project
-.\scripts\commit.ps1
+$env:PYTHONPATH = "src"
+uvicorn central_ai.main:app --host 127.0.0.1 --port 8000
 ```
 
-The script will ask you, in order:
+- API root: http://127.0.0.1:8000/
+- Swagger docs: http://127.0.0.1:8000/docs
+- Health endpoint: http://127.0.0.1:8000/api/v1/health
 
-1. **Commit on master?** → `Y` / `N`
-2. If **N**: show existing branches → **N**ew branch or **E**xisting → enter name/number
-3. **Commit message**
-4. **Push this branch to GitHub?** → `Y` / `N` (same branch you just committed)
-5. If you used a feature branch: **Merge into master now?** → `Y` / `N`
-6. If you merged: **Push master to GitHub?** → `Y` / `N`
+## API Usage
 
-Non-interactive mode still does not push unless you run `git push` yourself (or use the interactive prompts above).
-
-### Non-interactive (optional)
+### 1. Analyze Handwriting & Generate HPI Profile
 
 ```powershell
-.\scripts\commit.ps1 -Message "Describe your change"
-.\scripts\commit.ps1 -Message "Describe your change" -Branch feature/my-change
-.\scripts\commit.ps1 -Merge -Branch feature/my-change
+curl -X POST "http://127.0.0.1:8000/api/v1/handwriting/analyze" `
+  -H "X-Api-Key: dev-key" `
+  -H "X-Project-Id: hpi" `
+  -F "file=@note.jpg"
 ```
+
+Response schema includes:
+- `result_id` (str)
+- `status` ("completed" | "low_confidence")
+- `confidence` (float)
+- `features` (`slant`, `spacing`, `shapes`, `stroke_geometry`, `consistency`, `detected_text`)
+- `profile` (`standout_strength`, `scores`, `insights`)
+
+### 2. Image Quality Validation Only
+
+```powershell
+curl -X POST "http://127.0.0.1:8000/api/v1/images/validate" `
+  -H "X-Api-Key: dev-key" `
+  -H "X-Project-Id: hpi" `
+  -F "file=@note.jpg"
+```
+
+Response includes `scan_quality`, `handwriting_detected`, and `retake`.

@@ -1,4 +1,4 @@
-# Data dir: keep placeholder only (Postgres holds DB; uploads/logs stay local)
+# Data dir: optional debug uploads only (no DB)
 data/*
 !data/.gitkeep
 *.db
@@ -15,6 +15,7 @@ packages/**/*.egg-info/
 # Env
 .env
 .env.*
+!.env.example
 
 # IDE / OS
 .idea/
