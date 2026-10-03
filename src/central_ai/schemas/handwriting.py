@@ -60,7 +60,6 @@ class AnalysisResultPayload(BaseModel):
     status: str = Field(..., description="Processing status ('completed' or 'low_confidence')")
     confidence: float = Field(..., description="Overall confidence percentage")
     project_id: str = Field(..., description="Originating project/tenant ID")
-    org_id: str = Field(..., description="Originating organization ID")
     features: FeatureSet = Field(..., description="Extracted handwriting features")
     profile: AssessmentProfile = Field(..., description="Calculated HPI profile")
     model_version: str = Field(..., description="Model version tag")
@@ -69,3 +68,25 @@ class AnalysisResultPayload(BaseModel):
     feature_schema_version: str = Field(..., description="Feature schema version tag")
     analyzed_at: str = Field(..., description="ISO 8601 UTC timestamp")
     upload_path: Optional[str] = Field(default=None, description="Optional local upload file path")
+    training_status: Optional[Dict[str, Any]] = Field(
+        default=None, description="Active learning feedback status if training side-by-side with upload"
+    )
+
+
+class ModelStatusResponse(BaseModel):
+    """Current state and sample count of active learning model."""
+    mode: str = Field(..., description="Current inference mode ('trained_supervised_ml' or 'calibrated_graphological_rules')")
+    total_samples_trained: int = Field(..., description="Total verified handwriting samples learned")
+    last_updated: Optional[str] = Field(default=None, description="ISO timestamp of last training iteration")
+    model_version: str = Field(..., description="Model architecture or checkpoint version")
+
+
+class TrainingResultResponse(BaseModel):
+    """Response returned when submitting a training sample."""
+    status: str = Field(..., description="'trained' or 'skipped'")
+    sample_id: str = Field(..., description="Identifier of the recorded sample")
+    total_samples_trained: int = Field(..., description="Total samples in dataset after this update")
+    updated_at: Optional[str] = Field(default=None, description="Timestamp model was updated")
+    recorded_scores: Dict[str, float] = Field(default_factory=dict, description="Verified scores associated with sample")
+    metrics_summary: Dict[str, float] = Field(default_factory=dict, description="Biometric feature vector extracted from upload")
+

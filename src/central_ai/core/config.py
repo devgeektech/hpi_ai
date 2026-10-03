@@ -21,9 +21,9 @@ LOGS_DIR.mkdir(parents=True, exist_ok=True)
 # Security & Tenancy
 API_KEY: str = os.getenv("CENTRAL_API_KEY", "dev-key")
 DEFAULT_PROJECT_ID: str = "hpi"
-DEFAULT_ORG_ID: str = "org-default"
 
 # Model Configuration
+DEFAULT_OCR_ENGINE: str = os.getenv("DEFAULT_OCR_ENGINE", "paddle")
 TROCR_MODEL_ID: str = os.getenv("TROCR_MODEL_ID", "microsoft/trocr-base-handwritten")
 
 # Domain Feature Versions

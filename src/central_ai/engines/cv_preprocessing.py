@@ -62,9 +62,45 @@ def order_points(pts: np.ndarray) -> np.ndarray:
     return np.array([tl, tr, br, bl], dtype="float32")
 
 
-def four_point_transform(image: np.ndarray, pts: np.ndarray) -> np.ndarray:
-    """Perform a perspective warp to obtain a straightened rectangular crop."""
+def expand_polygon(
+    pts: np.ndarray,
+    pad_x_ratio: float = 0.04,
+    pad_y_ratio: float = 0.18,
+    img_shape: Optional[Tuple[int, int]] = None,
+) -> np.ndarray:
+    """Expand 4-point polygon outward by pad_x_ratio and pad_y_ratio to prevent cursive clipping."""
     rect = order_points(pts)
+    (tl, tr, br, bl) = rect
+
+    width = max(float(np.linalg.norm(tr - tl)), float(np.linalg.norm(br - bl)), 1.0)
+    height = max(float(np.linalg.norm(bl - tl)), float(np.linalg.norm(br - tr)), 1.0)
+
+    dx = width * pad_x_ratio
+    dy = height * pad_y_ratio
+
+    expanded = np.array([
+        [tl[0] - dx, tl[1] - dy],
+        [tr[0] + dx, tr[1] - dy],
+        [br[0] + dx, br[1] + dy],
+        [bl[0] - dx, bl[1] + dy],
+    ], dtype="float32")
+
+    if img_shape is not None:
+        h_max, w_max = img_shape[:2]
+        expanded[:, 0] = np.clip(expanded[:, 0], 0, w_max - 1)
+        expanded[:, 1] = np.clip(expanded[:, 1], 0, h_max - 1)
+
+    return expanded
+
+
+def four_point_transform(
+    image: np.ndarray,
+    pts: np.ndarray,
+    pad_x: float = 0.04,
+    pad_y: float = 0.18,
+) -> np.ndarray:
+    """Perform a perspective warp to obtain a straightened rectangular crop with safety padding."""
+    rect = expand_polygon(pts, pad_x_ratio=pad_x, pad_y_ratio=pad_y, img_shape=image.shape)
     (tl, tr, br, bl) = rect
 
     width_a = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
@@ -211,9 +247,9 @@ def perform_advanced_analysis(image_bytes: bytes) -> Dict[str, str]:
         relative_size = "Medium proportional size"
 
     # Uniformity & consistency
+    h_variance = float(np.std(heights)) if heights else 15.0
+    a_variance = float(np.std(angles)) if angles else 20.0
     if heights and angles:
-        h_variance = float(np.std(heights))
-        a_variance = float(np.std(angles))
         if h_variance < 10.0 and a_variance < 15.0:
             consistency = "Highly uniform and methodical"
         elif h_variance > 20.0 or a_variance > 30.0:
@@ -223,6 +259,19 @@ def perform_advanced_analysis(image_bytes: bytes) -> Dict[str, str]:
     else:
         consistency = "Generally consistent"
 
+    # Normalized physical metrics for ML training and continuous behavioral scoring
+    metrics: Dict[str, float] = {
+        "slant_angle": float(np.mean(angles)) if angles else 0.0,
+        "slant_std": a_variance,
+        "pressure_density": float(density),
+        "aspect_ratio_mean": float(np.mean(aspect_ratios)) if aspect_ratios else 1.0,
+        "letter_height_mean": float(np.mean(heights)) if heights else 30.0,
+        "letter_height_std": h_variance,
+        "word_gap_mean": float(np.mean(valid_gaps)) if (len(x_positions) > 2 and valid_gaps) else 25.0,
+        "word_gap_std": float(np.std(valid_gaps)) if (len(x_positions) > 2 and valid_gaps) else 10.0,
+        "uniformity_score": float(np.clip(1.0 - ((h_variance / 40.0) + (a_variance / 60.0)) / 2.0, 0.0, 1.0)),
+    }
+
     return {
         "slant": slant,
         "spacing": spacing,
@@ -230,4 +279,5 @@ def perform_advanced_analysis(image_bytes: bytes) -> Dict[str, str]:
         "relative_size": relative_size,
         "consistency": consistency,
         "stroke_geometry": stroke_geometry,
+        "metrics": metrics,
     }
