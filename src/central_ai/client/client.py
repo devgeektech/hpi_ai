@@ -83,7 +83,7 @@ class CentralAIClient:
             files = {"file": (filename, file_bytes, content_type)}
             data = {"scores": json.dumps(scores)}
             response = client.post(
-                self._url("/api/v1/handwriting/train"),
+                self._url("/api/v1/training/train"),
                 headers=self.headers,
                 data=data,
                 files=files,
@@ -95,25 +95,61 @@ class CentralAIClient:
         """Fetch the active learning model status, trained sample count, and active version."""
         with httpx.Client(timeout=self.timeout) as client:
             response = client.get(
-                self._url("/api/v1/handwriting/model"),
+                self._url("/api/v1/training/model"),
                 headers=self.headers,
             )
             response.raise_for_status()
             return response.json()
 
-    def validate_image(
+    def assess_hpi(
         self,
-        file_bytes: bytes,
-        filename: str = "note.jpg",
-        content_type: str = "image/jpeg",
+        analysis_result_or_metrics: Dict[str, Any],
+        ocr_confidence: Optional[float] = None,
+        quality_confidence: Optional[float] = None,
+        sample_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Validate image quality, blur, and handwriting presence."""
+        """Assess HPI methodology from previously extracted handwriting parameters.
+
+        Accepts either:
+        - The full perception response dictionary from client.analyze_handwriting(...)
+        - Or a dictionary of physical biometric metrics {'slant_angle': 2.5, 'pressure_density': 0.08, ...}
+        """
+        payload: Dict[str, Any] = {}
+        if "handwriting_features" in analysis_result_or_metrics or "quality_gate" in analysis_result_or_metrics:
+            payload = {
+                "result_id": analysis_result_or_metrics.get("result_id"),
+                "handwriting_features": analysis_result_or_metrics.get("handwriting_features"),
+                "quality_gate": analysis_result_or_metrics.get("quality_gate"),
+                "ocr": analysis_result_or_metrics.get("ocr"),
+            }
+        elif "metrics" in analysis_result_or_metrics:
+            payload = analysis_result_or_metrics
+        else:
+            payload = {"metrics": analysis_result_or_metrics}
+
+        if ocr_confidence is not None:
+            payload["ocr_confidence"] = ocr_confidence
+        if quality_confidence is not None:
+            payload["quality_confidence"] = quality_confidence
+        if sample_id is not None:
+            payload["sample_id"] = sample_id
+
         with httpx.Client(timeout=self.timeout) as client:
-            files = {"file": (filename, file_bytes, content_type)}
             response = client.post(
-                self._url("/api/v1/images/validate"),
+                self._url("/api/v1/hpi/assess"),
                 headers=self.headers,
-                files=files,
+                json=payload,
             )
             response.raise_for_status()
             return response.json()
+
+    def get_hpi_rules(self) -> Dict[str, Any]:
+        """Inspect active client-approved HPI methodology rules registry."""
+        with httpx.Client(timeout=self.timeout) as client:
+            response = client.get(
+                self._url("/api/v1/hpi/rules"),
+                headers=self.headers,
+            )
+            response.raise_for_status()
+            return response.json()
+

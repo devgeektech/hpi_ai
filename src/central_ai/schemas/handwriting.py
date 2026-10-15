@@ -47,6 +47,24 @@ class InsightDetail(BaseModel):
     action_to_practise: str = Field(..., description="Practical actionable developmental habit")
 
 
+class QualityIssue(BaseModel):
+    """Specific image quality defect identified during gating."""
+    criterion: str = Field(..., description="'blur' | 'glare' | 'cropping' | 'perspective' | 'incomplete_page' | 'visibility' | 'usability'")
+    severity: str = Field(..., description="'Warning' | 'Failed'")
+    value: float = Field(..., description="Measured defect value")
+    threshold: float = Field(..., description="Violated benchmark threshold")
+    message: str = Field(..., description="Human-readable remediation instructions")
+
+
+class QualityGateResult(BaseModel):
+    """Complete 7-point image quality gating evaluation."""
+    overall_status: str = Field(..., description="'Good' | 'Warning' | 'Failed'")
+    rescan_required: bool = Field(..., description="True if analysis must abort and user rescan")
+    failed_page: Optional[int] = Field(default=None, description="Specific page number needing rescan")
+    issues: List[QualityIssue] = Field(default_factory=list, description="List of quality issues identified")
+    metrics: Dict[str, float] = Field(default_factory=dict, description="Raw quantitative metrics")
+
+
 class AssessmentProfile(BaseModel):
     """Complete HPI assessment profile."""
     standout_strength: str = Field(..., description="Top standout strength title")
@@ -54,23 +72,59 @@ class AssessmentProfile(BaseModel):
     insights: List[InsightDetail] = Field(default_factory=list, description="Accompanying insights")
 
 
-class AnalysisResultPayload(BaseModel):
-    """Full handwriting analysis response payload."""
-    result_id: str = Field(..., description="Unique result tracking ID")
-    status: str = Field(..., description="Processing status ('completed' or 'low_confidence')")
-    confidence: float = Field(..., description="Overall confidence percentage")
-    project_id: str = Field(..., description="Originating project/tenant ID")
-    features: FeatureSet = Field(..., description="Extracted handwriting features")
-    profile: AssessmentProfile = Field(..., description="Calculated HPI profile")
-    model_version: str = Field(..., description="Model version tag")
-    methodology_version: str = Field(..., description="Methodology version tag")
-    rule_version: str = Field(..., description="Rule engine version tag")
-    feature_schema_version: str = Field(..., description="Feature schema version tag")
+class OcrLineItem(BaseModel):
+    """Single line extracted via OCR."""
+    line_number: int = Field(..., description="1-indexed line order")
+    text: str = Field(..., description="Recognized line transcription")
+    confidence: float = Field(..., description="Line confidence percentage [0.0 - 100.0]")
+    bounding_box: Optional[List[List[float]]] = Field(default=None, description="4-point polygon coordinates")
+
+
+class OcrExtractionResult(BaseModel):
+    """Extracted text recognition results."""
+    detected_text: str = Field(default="", description="Full handwritten text transcription")
+    total_lines: int = Field(default=0, description="Total detected lines")
+    total_words: int = Field(default=0, description="Total word count")
+    total_characters: int = Field(default=0, description="Total character count")
+    ocr_confidence: float = Field(default=0.0, description="Overall OCR confidence percentage")
+    engine: str = Field(default="paddle", description="OCR engine utilized")
+    lines: List[OcrLineItem] = Field(default_factory=list, description="Line-by-line transcription details")
+
+
+class HandwritingFeaturesResult(BaseModel):
+    """Objective computer vision handwriting measurements (zero psychological interpretation)."""
+    slant: str = Field(default="Unknown", description="Slant direction description")
+    spacing: str = Field(default="Unknown", description="Spacing pattern description")
+    shapes: str = Field(default="Unknown", description="Loop and character shape geometry")
+    relative_size: str = Field(default="Unknown", description="Proportional size classification")
+    consistency: str = Field(default="Unknown", description="Baseline uniformity classification")
+    stroke_geometry: str = Field(default="Unknown", description="Stroke pressure and line weight")
+    metrics: Dict[str, float] = Field(default_factory=dict, description="Quantitative biometric metrics")
+
+
+class ImageDimension(BaseModel):
+    width: int = Field(default=0, description="Image width in pixels")
+    height: int = Field(default=0, description="Image height in pixels")
+
+
+class AnalysisMetadata(BaseModel):
+    filename: str = Field(..., description="Uploaded image filename")
+    image_size_bytes: int = Field(..., description="File size in bytes")
+    dimensions: ImageDimension = Field(default_factory=ImageDimension, description="Image pixel dimensions")
+    project_id: str = Field(..., description="Project / tenant identifier")
     analyzed_at: str = Field(..., description="ISO 8601 UTC timestamp")
-    upload_path: Optional[str] = Field(default=None, description="Optional local upload file path")
-    training_status: Optional[Dict[str, Any]] = Field(
-        default=None, description="Active learning feedback status if training side-by-side with upload"
-    )
+    processing_time_seconds: float = Field(default=0.0, description="Elapsed processing time in seconds")
+
+
+class AnalysisResultPayload(BaseModel):
+    """Handwriting perception response containing image quality gating, text extraction, and biometrics."""
+    result_id: str = Field(..., description="Unique result tracking ID")
+    status: str = Field(..., description="Processing status ('completed', 'warning', or 'failed_quality_check')")
+    message: str = Field(..., description="Status summary and remediation instructions")
+    quality_gate: QualityGateResult = Field(..., description="7-point image quality gate evaluation")
+    ocr: OcrExtractionResult = Field(..., description="Extracted text and line-by-line transcription")
+    handwriting_features: HandwritingFeaturesResult = Field(..., description="Objective physical handwriting stroke measurements")
+    metadata: AnalysisMetadata = Field(..., description="Analysis execution metadata")
 
 
 class ModelStatusResponse(BaseModel):

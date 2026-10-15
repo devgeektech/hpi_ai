@@ -5,14 +5,19 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api.routes import health_router, images_router, handwriting_router
+from .api.routes import (
+    health_router,
+    handwriting_router,
+    hpi_router,
+    training_router,
+)
 
 app = FastAPI(
-    title="Central AI — Handwriting Analysis",
+    title="Central AI — Handwriting Analysis & HPI Assessment",
     version="1.0.0",
     description=(
-        "Stateless Handwriting OCR and HPI Assessment API. "
-        "Supports multi-tenant integration across consumer applications via X-Project-Id."
+        "Universal Handwriting Perception (OCR, Quality Gate, Biometrics) and Project-Specific Assessment APIs. "
+        "Supports multi-tenant integration across consumer applications (HPI, Boardroom, Adult HMB) via X-Project-Id."
     ),
 )
 
@@ -28,8 +33,9 @@ app.add_middleware(
 # API v1 Routers
 API_V1_PREFIX = "/api/v1"
 app.include_router(health_router, prefix=API_V1_PREFIX)
-app.include_router(images_router, prefix=API_V1_PREFIX)
 app.include_router(handwriting_router, prefix=API_V1_PREFIX)
+app.include_router(hpi_router, prefix=API_V1_PREFIX)
+app.include_router(training_router, prefix=API_V1_PREFIX)
 
 
 @app.get("/", tags=["root"])
@@ -41,7 +47,6 @@ def root():
         "docs": "/docs",
         "health": f"{API_V1_PREFIX}/health",
         "analyze": f"{API_V1_PREFIX}/handwriting/analyze",
-        "validate": f"{API_V1_PREFIX}/images/validate",
     }
 
 

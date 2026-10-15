@@ -12,25 +12,57 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from central_ai.api.dependencies import get_tenant
 from central_ai.core.config import UPLOADS_DIR, VERSIONS
 from central_ai.core.logging import logger
-from central_ai.engines.cv_preprocessing import perform_advanced_analysis
-from central_ai.engines.ocr_engine import process_handwritten_note
-from central_ai.engines.hpi_assessment import (
-    generate_profile,
-    get_model_status,
-    record_and_train_sample,
+from central_ai.engines.cv_preprocessing import (
+    decode_image_bytes,
+    evaluate_scan_quality,
+    perform_advanced_analysis,
 )
+from central_ai.engines.ocr_engine import process_handwritten_note
 from central_ai.schemas.handwriting import (
+    AnalysisMetadata,
     AnalysisResultPayload,
     FeatureSet,
-    AssessmentProfile,
-    ModelStatusResponse,
-    TrainingResultResponse,
+    HandwritingFeaturesResult,
+    ImageDimension,
+    OcrExtractionResult,
+    OcrLineItem,
+    QualityGateResult,
 )
 
 router = APIRouter(prefix="/handwriting", tags=["handwriting"])
 
 
-@router.post("/analyze", response_model=AnalysisResultPayload)
+@router.post(
+    "/analyze",
+    response_model=AnalysisResultPayload,
+    summary="check image quality gate and extract text on it",
+    description="""Before performing HPI analysis, evaluate the submitted handwriting image.
+
+Check for:
+
+- Blur
+- Glare
+- Cropping
+- Perspective problems
+- Incomplete page
+- Whether handwriting is actually visible
+- Whether the page is usable for analysis
+
+Classify the image as:
+
+- Good
+- Warning
+- Failed
+
+If the image fails quality requirements:
+
+- Do not continue with HPI analysis.
+- Clearly explain what is wrong.
+- Ask the user to retake/rescan only the required page.
+- Do not generate personality or behavioral findings from a failed image.
+
+The HPI specification requires image quality gating before analysis.""",
+)
 async def analyze_handwriting(
     file: UploadFile = File(...),
     engine: str = Query(
@@ -43,10 +75,32 @@ async def analyze_handwriting(
     ),
     tenant: dict = Depends(get_tenant),
 ):
-    """Stateless handwriting analysis endpoint:
+    """Before performing HPI analysis, evaluate the submitted handwriting image.
 
-    Performs OCR, extracts handwriting geometry, and generates the HPI assessment profile.
-    If verified_scores is supplied, trains the machine learning model side-by-side in real time!
+    Check for:
+
+    - Blur
+    - Glare
+    - Cropping
+    - Perspective problems
+    - Incomplete page
+    - Whether handwriting is actually visible
+    - Whether the page is usable for analysis
+
+    Classify the image as:
+
+    - Good
+    - Warning
+    - Failed
+
+    If the image fails quality requirements:
+
+    - Do not continue with HPI analysis.
+    - Clearly explain what is wrong.
+    - Ask the user to retake/rescan only the required page.
+    - Do not generate personality or behavioral findings from a failed image.
+
+    The HPI specification requires image quality gating before analysis.
     """
     data = await file.read()
     if not data:
@@ -62,53 +116,105 @@ async def analyze_handwriting(
         logger.warning(f"Could not persist upload locally: {exc}")
 
     pipeline_start = time.perf_counter()
+    img_np = decode_image_bytes(data)
+    img_h, img_w = (img_np.shape[0], img_np.shape[1]) if img_np is not None else (0, 0)
+
     logger.info(
-        f"[{result_id}] Starting handwriting analysis pipeline for project '{tenant['project_id']}' "
-        f"({len(data):,} bytes, engine='{engine}')"
+        f"[{result_id}] [Step 1/3] Running Image Quality Gate for project '{tenant['project_id']}' "
+        f"({len(data):,} bytes, dimensions={img_w}x{img_h})"
+    )
+
+    # 1. Image Quality Gate Evaluation (7-point HPI check)
+    quality_report = evaluate_scan_quality(data, page_number=1)
+    logger.info(
+        f"[{result_id}] Quality Gate Result: {quality_report.overall_status} "
+        f"(rescan_required={quality_report.rescan_required}, issues={len(quality_report.issues)})"
+    )
+
+    # If the image fails quality requirements:
+    # - Do not continue with HPI analysis.
+    # - Clearly explain what is wrong.
+    # - Ask the user to retake/rescan only the required page.
+    # - Do not generate personality or behavioral findings from a failed image.
+    if quality_report.rescan_required:
+        explanation = "; ".join(f"[{iss['criterion'].title()}] {iss['message']}" for iss in quality_report.issues)
+        logger.warning(
+            f"[{result_id}] Image failed quality requirements ({quality_report.overall_status}). "
+            f"Aborting analysis. Issues: {explanation}"
+        )
+        return AnalysisResultPayload(
+            result_id=result_id,
+            status="failed_quality_check",
+            message=f"Image quality check failed ({explanation}). Please retake/rescan page {quality_report.failed_page or 1}.",
+            quality_gate=QualityGateResult(**quality_report.to_dict()),
+            ocr=OcrExtractionResult(
+                detected_text="",
+                total_lines=0,
+                total_words=0,
+                total_characters=0,
+                ocr_confidence=0.0,
+                engine=engine,
+                lines=[],
+            ),
+            handwriting_features=HandwritingFeaturesResult(
+                slant="Unknown",
+                spacing="Unknown",
+                shapes="Unknown",
+                relative_size="Unknown",
+                consistency="Unknown",
+                stroke_geometry="Unknown",
+                metrics={},
+            ),
+            metadata=AnalysisMetadata(
+                filename=filename,
+                image_size_bytes=len(data),
+                dimensions=ImageDimension(width=img_w, height=img_h),
+                project_id=tenant["project_id"],
+                analyzed_at=datetime.now(timezone.utc).isoformat(),
+                processing_time_seconds=round(time.perf_counter() - pipeline_start, 3),
+            ),
+        )
+
+    logger.info(
+        f"[{result_id}] [Step 2/3] Extracting text via OCR engine '{engine}'..."
     )
 
     try:
         ocr_result = process_handwritten_note(data, engine=engine)
 
         t_geom_start = time.perf_counter()
-        logger.info(f"[{result_id}] [Step 3/4] Extracting handwriting stroke geometry & pressure...")
+        logger.info(f"[{result_id}] [Step 3/3] Extracting handwriting stroke geometry & measurements...")
         advanced_features = perform_advanced_analysis(data)
-        logger.info(f"[{result_id}] [Step 3/4] Geometry analysis completed in {time.perf_counter() - t_geom_start:.2f}s")
-
-        # Side-by-side active training if verified scores accompany the upload
-        training_info = None
-        if verified_scores:
-            try:
-                parsed_scores = json.loads(verified_scores)
-                if isinstance(parsed_scores, dict):
-                    training_info = record_and_train_sample(
-                        features=advanced_features,
-                        verified_scores=parsed_scores,
-                        sample_id=result_id,
-                    )
-                    logger.info(
-                        f"[{result_id}] [Active Learning] Trained model side-by-side with upload! "
-                        f"Status: {training_info.get('status')}, Total samples: {training_info.get('total_samples_trained')}"
-                    )
-            except Exception as train_exc:
-                logger.warning(f"[{result_id}] Side-by-side training skipped: {train_exc}")
-
-        t_hpi_start = time.perf_counter()
-        logger.info(f"[{result_id}] [Step 4/4] Generating HPI personality assessment profile...")
-        assessment_profile = generate_profile(
-            boxes=ocr_result.get("boxes", []),
-            text=ocr_result.get("detected_text", ""),
-            features=advanced_features,
-        )
-        logger.info(f"[{result_id}] [Step 4/4] HPI profile generated in {time.perf_counter() - t_hpi_start:.3f}s")
+        logger.info(f"[{result_id}] [Step 3/3] Geometry analysis completed in {time.perf_counter() - t_geom_start:.2f}s")
 
         total_elapsed = time.perf_counter() - pipeline_start
-        logger.info(f"[{result_id}] >>> Handwriting analysis completed in {total_elapsed:.2f}s <<<")
+        logger.info(f"[{result_id}] >>> Handwriting perception completed in {total_elapsed:.2f}s <<<")
 
-        # Formatted console output for side-by-side verification with uploaded image
+        # Line-by-line transcription details
+        raw_boxes = ocr_result.get("boxes", [])
+        ocr_lines: List[OcrLineItem] = []
+        for idx, b in enumerate(raw_boxes, start=1):
+            if len(b) > 1 and b[1] and len(b[1]) > 0:
+                txt = str(b[1][0]).strip()
+                conf_val = float(b[1][1]) if len(b[1]) > 1 else None
+                conf_pct = round(conf_val * 100, 1) if conf_val is not None and conf_val <= 1.0 else (conf_val or 0.0)
+                poly = b[0]
+                poly_list = poly.tolist() if hasattr(poly, "tolist") else poly
+                ocr_lines.append(
+                    OcrLineItem(
+                        line_number=idx,
+                        text=txt,
+                        confidence=conf_pct,
+                        bounding_box=poly_list if isinstance(poly_list, list) else None,
+                    )
+                )
+
         extracted_text = ocr_result.get("detected_text", "").strip()
         lines = [line.strip() for line in extracted_text.splitlines() if line.strip()]
+        words = extracted_text.split()
+        ocr_confidence = float(ocr_result.get("handwriting_detected") or 0.0)
 
+        # Formatted console output for side-by-side verification with uploaded image
         summary_lines = [
             "",
             "=" * 72,
@@ -116,11 +222,12 @@ async def analyze_handwriting(
             "=" * 72,
             f"Result ID    : {result_id}",
             f"Engine Used  : {ocr_result.get('engine', engine).upper()}",
-            f"Image Size   : {len(data):,} bytes",
+            f"Image Size   : {len(data):,} bytes ({img_w}x{img_h})",
+            f"Quality Gate : {quality_report.overall_status}",
             f"Total Lines  : {len(lines)} line(s)",
+            f"Total Words  : {len(words)} word(s)",
             f"Characters   : {len(extracted_text):,} characters",
-            f"Confidence   : {float(ocr_result.get('handwriting_detected') or 0.0):.1f}%",
-            f"Standout     : {assessment_profile.get('standout_strength', 'N/A')}",
+            f"Confidence   : {ocr_confidence:.1f}%",
             f"Elapsed Time : {total_elapsed:.2f}s",
             "-" * 72,
             "LINE-BY-LINE TRANSCRIPTION (Compare directly with uploaded image):",
@@ -139,98 +246,49 @@ async def analyze_handwriting(
         logger.error(f"Analysis engine failure: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Handwriting analysis failed: {exc}") from exc
 
-    confidence = float(ocr_result.get("handwriting_detected") or 0.0)
-    if ocr_result.get("retake"):
-        confidence = min(confidence, 40.0)
+    status = "completed" if quality_report.overall_status == "Good" else "warning"
+    pass_msg = (
+        "Image quality check passed. Text extracted successfully."
+        if quality_report.overall_status == "Good"
+        else f"Image passed with quality warnings: {'; '.join(i['message'] for i in quality_report.issues)}. Text extracted successfully."
+    )
 
-    feature_set = FeatureSet(
+    ocr_payload = OcrExtractionResult(
+        detected_text=extracted_text,
+        total_lines=len(lines),
+        total_words=len(words),
+        total_characters=len(extracted_text),
+        ocr_confidence=ocr_confidence,
+        engine=ocr_result.get("engine", engine),
+        lines=ocr_lines,
+    )
+
+    hw_features_payload = HandwritingFeaturesResult(
         slant=advanced_features.get("slant", "Unknown"),
         spacing=advanced_features.get("spacing", "Unknown"),
         shapes=advanced_features.get("shapes", "Unknown"),
         relative_size=advanced_features.get("relative_size", "Unknown"),
         consistency=advanced_features.get("consistency", "Unknown"),
         stroke_geometry=advanced_features.get("stroke_geometry", "Unknown"),
-        detected_text=ocr_result.get("detected_text", ""),
-        scan_quality=ocr_result.get("scan_quality", "unknown"),
-        handwriting_detected=confidence,
-        retake=bool(ocr_result.get("retake")),
+        metrics=advanced_features.get("metrics", {}),
     )
 
-    status = "completed" if confidence >= 45.0 else "low_confidence"
+    metadata_payload = AnalysisMetadata(
+        filename=filename,
+        image_size_bytes=len(data),
+        dimensions=ImageDimension(width=img_w, height=img_h),
+        project_id=tenant["project_id"],
+        analyzed_at=datetime.now(timezone.utc).isoformat(),
+        processing_time_seconds=round(time.perf_counter() - pipeline_start, 3),
+    )
 
     return AnalysisResultPayload(
         result_id=result_id,
         status=status,
-        confidence=confidence,
-        project_id=tenant["project_id"],
-        features=feature_set,
-        profile=AssessmentProfile(**assessment_profile),
-        model_version=VERSIONS["model_version"],
-        methodology_version=VERSIONS["methodology_version"],
-        rule_version=VERSIONS["rule_version"],
-        feature_schema_version=VERSIONS["feature_schema_version"],
-        analyzed_at=datetime.now(timezone.utc).isoformat(),
-        upload_path=str(destination_path),
-        training_status=training_info,
+        message=pass_msg,
+        quality_gate=QualityGateResult(**quality_report.to_dict()),
+        ocr=ocr_payload,
+        handwriting_features=hw_features_payload,
+        metadata=metadata_payload,
     )
-
-
-@router.post("/train", response_model=TrainingResultResponse)
-async def train_model_sample(
-    file: UploadFile = File(..., description="Handwriting image to train the model with"),
-    scores: str = Form(
-        ...,
-        description="JSON dictionary of verified HPI trait scores, e.g. '{\"Execution\": 85, \"Focus\": 90, \"Logic\": 82}'",
-    ),
-    tenant: dict = Depends(get_tenant),
-):
-    """Side-by-side active learning training endpoint:
-
-    Extracts handwriting biometric feature vector from the uploaded image and immediately
-    retrains the HPI machine-learning behavioral model.
-    """
-    data = await file.read()
-    if not data:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-
-    try:
-        scores_dict = json.loads(scores)
-        if not isinstance(scores_dict, dict):
-            raise ValueError("Scores must be a JSON object mapping trait names to numbers.")
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid scores JSON: {exc}")
-
-    sample_id = f"TRAIN-{uuid.uuid4().hex[:8].upper()}"
-    filename = file.filename or "sample.jpg"
-
-    advanced_features = perform_advanced_analysis(data)
-    train_res = record_and_train_sample(
-        features=advanced_features,
-        verified_scores=scores_dict,
-        sample_id=sample_id,
-    )
-
-    metrics = (advanced_features.get("metrics") or {})
-    numeric_metrics = {k: float(v) for k, v in metrics.items() if isinstance(v, (int, float))}
-
-    logger.info(
-        f"[{sample_id}] Successfully recorded training sample '{filename}'. "
-        f"Model retrained across {train_res.get('total_samples_trained', 0)} sample(s)."
-    )
-
-    return TrainingResultResponse(
-        status=train_res.get("status", "trained"),
-        sample_id=sample_id,
-        total_samples_trained=train_res.get("total_samples_trained", 0),
-        updated_at=train_res.get("updated_at"),
-        recorded_scores=scores_dict,
-        metrics_summary=numeric_metrics,
-    )
-
-
-@router.get("/model", response_model=ModelStatusResponse)
-async def get_handwriting_model():
-    """Inspect the active learning model state, total trained sample count, and active version."""
-    status = get_model_status()
-    return ModelStatusResponse(**status)
 
